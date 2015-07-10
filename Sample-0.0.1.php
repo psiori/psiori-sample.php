@@ -33,28 +33,34 @@ class Sample
     const DEFAULT_CHARSET = 'utf-8';
     
     
-    public $appToken      = null;
-    public $serverSide    = true;
+    public $appToken       = null;
+    public $serverSide     = true;
+    public $requestTimeout = 2;
 
 
     protected function __construct() 
     {
         $this->httpReferer  = !empty($_SERVER['HTTP_REFERER']) ? $_SERVER['HTTP_REFERER'] : false;
-        $this->charset      = self::DEFAULT_CHARSET;
-        $this->pageUrl      = self::getCurrentUrl();
+        $this->charset      = static::DEFAULT_CHARSET;
+        $this->pageUrl      = static::getCurrentUrl();
         $this->remoteIp     = !empty($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : false;
         $this->userAgent    = !empty($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : false;
     }
-    
+
+    /**
+     * @param string $appToken
+     * @return Sample
+     */
     public static function &instance($appToken=null) 
     {
-        if (self::$instance == null) {
-            self::$instance = new Sample();
+        if (static::$instance == null) {
+            static::$instance = new static();
         }
         if (!empty($appToken)) {
-            self::$instance->appToken = $appToken;
+            static::$instance->appToken = $appToken;
         }
-        return self::$instance;
+        
+        return static::$instance;
     }
 
     /**
@@ -64,7 +70,7 @@ class Sample
     {
         $this->processingTime = $timeInMs;
     }
-
+    
     /**
      * Overrides auto-detected Remote IP address
      *
@@ -79,6 +85,26 @@ class Sample
     public function setUserId($userId)
     {
         $this->userId = $userId;
+    }
+    
+    public function setInstallToken($token)
+    {
+        $this->installToken = $token;
+    }
+
+    public function setSessionToken($token)
+    {
+        $this->sessionToken = $token;
+    }
+    
+    /** Sets the ad referrer, campaign and placement for all events.
+      * pass in null to reset / delete a referer.
+      */
+    public function setReferer($referer, $campaign, $placement=null)
+    {
+      $this->ad_referer   = $referer;
+      $this->ad_campaign  = $campaign;
+      $this->ad_placement = $placement;
     }
     
     
@@ -109,7 +135,7 @@ class Sample
     public function track($eventName, $eventCategory, $params=array()) 
     {
         $params = $this->mergeParams($params, $eventName, $eventCategory);
-        $this->sendRequest(self::$endPoint, $params);
+        $this->sendRequest(static::$endPoint, $params);
     }
     
 
@@ -145,7 +171,38 @@ class Sample
     {
       $this->track('update', 'account', $params);
     }
-     
+    
+    
+    
+    // /////////////////////////////////////////////////////////////////////////
+    //
+    //   PURCHASE EVENTS
+    //
+    // /////////////////////////////////////////////////////////////////////////
+
+    /** should be send when a user triggers a purchase 
+      * A purchase event should take at minimum the product_id, provider(payment provider), gross, 
+      * currency, country and the product_category. The product id is identical with the product 
+      * sku.
+      */
+    public function purchase($productId, $params=array())
+    {
+      $params['pur_product_sku'] = $productId;
+      $this->track('purchase', 'revenue', $params);
+    }
+
+    /** should be send when a users charges his money back
+      * A chargeback event should take at minimum the product_id, provider(payment provider), gross,
+      * currency, country and the product_category. The product id is identical with the product 
+      * sku.
+      */
+    public function chargeback($productId, $params=array())
+    {
+      $params['product_sku'] = $productId;
+      $this->track('chargeback', 'revenue', $params);
+    }
+    
+    
      
     /**
      * Returns current timestamp, or forced timestamp/datetime if it was set
@@ -188,6 +245,7 @@ class Sample
      */
     protected function sendRequest($url, $data = null)
     {
+        $method = 'POST'; // presently supports only post!
         $data_string = empty($data) ? "" :  json_encode([ "p" => $data]);  
         
         if (function_exists('curl_init') && function_exists('curl_exec')) {
@@ -270,8 +328,8 @@ class Sample
     {
       $params = array();
 
-      $this->add($params, "sdk",            self::SDK);
-      $this->add($params, "sdk_version",    self::SDK_VERSION);
+      $this->add($params, "sdk",            static::SDK);
+      $this->add($params, "sdk_version",    static::SDK_VERSION);
 
       $this->add($params, "server_side",    $this->serverSide);
 
@@ -281,9 +339,11 @@ class Sample
 
       $this->add($params, "event_name",     $eventName);
       $this->add($params, "app_token",      $this->appToken);
+
+      $this->add($params, "remote_ip",      $this->remoteIp);
       
-      // $this->add($params, "install_token",  installToken);
-      // $this->add($params, "session_token",  sessionToken);
+      $this->add($params, "install_token",  $this->installToken);
+      $this->add($params, "session_token",  $this->sessionToken);
       $this->add($params, "debug",          $this->debugMode);
       $this->add($params, "timestamp",      $userParams["timestamp"], $this->getTimestamp());
       $this->add($params, "user_id",        $this->userId);
@@ -303,6 +363,8 @@ class Sample
       $this->add($params, "parameter5",     $userParams["parameter5"]);
       $this->add($params, "parameter6",     $userParams["parameter6"]);
 
+      $this->add($params, "processingTime", $userParams["processingTime"]);
+
       if ($eventName === "purchase" ||
           $eventName === "chargeback")
       {
@@ -312,6 +374,7 @@ class Sample
         $this->add($params, "pur_country_code",       $userParams["pur_country_code"]);
         $this->add($params, "pur_earnings",           $userParams["pur_earnings"]);
         $this->add($params, "pur_product_sku",        $userParams["pur_product_sku"]);
+        $this->add($params, "pur_invoice_id",         $userParams["pur_invoice_id"]);
         $this->add($params, "pur_product_category",   $userParams["pur_product_category"]);
         $this->add($params, "pur_receipt_identifier", $userParams["pur_receipt_identifier"]);
       }
@@ -338,8 +401,7 @@ class Sample
 
         $this->add($params, "host",          $userParams["host"], $this->host);
       }
-
-
+      
       return $params;
     }
     
@@ -405,9 +467,9 @@ class Sample
      */
     static protected function getCurrentUrl()
     {
-        return self::getCurrentScheme() . '://'
-            . self::getCurrentHost()
-            . self::getCurrentScriptName()
-            . self::getCurrentQueryString();
+        return static::getCurrentScheme() . '://'
+            . static::getCurrentHost()
+            . static::getCurrentScriptName()
+            . static::getCurrentQueryString();
     }
 }
